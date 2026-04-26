@@ -1,13 +1,11 @@
 package com.callrecorder
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -19,6 +17,7 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityMainBinding
     private lateinit var adapter: RecordingsAdapter
+    private val PERMISSION_REQUEST_CODE = 101
 
     private val REQUIRED_PERMISSIONS = mutableListOf(
         Manifest.permission.RECORD_AUDIO,
@@ -35,34 +34,20 @@ class MainActivity : AppCompatActivity() {
         }
     }.toTypedArray()
 
-    private val PERMISSION_REQUEST_CODE = 101
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        setupUI()
-
-        if (!allPermissionsGranted()) {
-            showPermissionRationale()
-        } else {
-            loadRecordings()
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        loadRecordings()
-    }
-
-    private fun setupUI() {
-        setSupportActionBar(binding.toolbar)
-        supportActionBar?.title = "📞 Call Recorder"
-
         adapter = RecordingsAdapter(
-            onPlay = { file -> playRecording(file) },
-            onDelete = { file -> deleteRecording(file) }
+            onPlay = { file ->
+                Toast.makeText(this, "Playing: ${file.name}", Toast.LENGTH_SHORT).show()
+            },
+            onDelete = { file ->
+                file.delete()
+                loadRecordings()
+                Toast.makeText(this, "Deleted", Toast.LENGTH_SHORT).show()
+            }
         )
 
         binding.recyclerView.layoutManager = LinearLayoutManager(this)
@@ -73,74 +58,26 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Refreshed", Toast.LENGTH_SHORT).show()
         }
 
-        binding.tvStatus.text = if (allPermissionsGranted())
-            "✅ Ready — calls will be recorded automatically"
-        else
-            "⚠️ Permissions required"
+        if (!allPermissionsGranted()) {
+            ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, PERMISSION_REQUEST_CODE)
+        } else {
+            binding.tvStatus.text = "✅ Ready — calls will be recorded automatically"
+            loadRecordings()
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        loadRecordings()
     }
 
     private fun loadRecordings() {
-        val dir = getRecordingsDir()
-        val files = dir.listFiles { f -> f.extension == "m4a" || f.extension == "3gp" }
-            ?.sortedByDescending { it.lastModified() }
-            ?: emptyList()
-
+        val dir = getRecordingsDir(this)
+        val files = dir.listFiles()?.sortedByDescending { it.lastModified() } ?: emptyList()
         adapter.submitList(files)
-
+        binding.tvRecordingCount.text = "${files.size} recording(s) saved"
         binding.tvEmpty.visibility = if (files.isEmpty())
             android.view.View.VISIBLE else android.view.View.GONE
-
-        binding.tvRecordingCount.text = "${files.size} recording(s) saved"
-    }
-
-    private fun playRecording(file: File) {
-        val intent = Intent(Intent.ACTION_VIEW).apply {
-            val uri = androidx.core.content.FileProvider.getUriForFile(
-                this@MainActivity,
-                "${packageName}.provider",
-                file
-            )
-            setDataAndType(uri, "audio/*")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        try {
-            startActivity(Intent.createChooser(intent, "Play with..."))
-        } catch (e: Exception) {
-            Toast.makeText(this, "No audio player found", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    private fun deleteRecording(file: File) {
-        AlertDialog.Builder(this)
-            .setTitle("Delete Recording")
-            .setMessage("Delete ${file.name}?")
-            .setPositiveButton("Delete") { _, _ ->
-                file.delete()
-                loadRecordings()
-                Toast.makeText(this, "Deleted", Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun showPermissionRationale() {
-        AlertDialog.Builder(this)
-            .setTitle("Permissions Required")
-            .setMessage(
-                "CallRecorder needs the following permissions:\n\n" +
-                "• Microphone — to record audio\n" +
-                "• Phone State — to detect calls\n" +
-                "• Call Log — to get caller info\n\n" +
-                "Please grant all permissions on the next screen."
-            )
-            .setPositiveButton("Grant") { _, _ -> requestPermissions() }
-            .setNegativeButton("Exit") { _, _ -> finish() }
-            .setCancelable(false)
-            .show()
-    }
-
-    private fun requestPermissions() {
-        ActivityCompat.requestPermissions(this, REQUIRED_PERMISSIONS, PERMISSION_REQUEST_CODE)
     }
 
     override fun onRequestPermissionsResult(
@@ -152,11 +89,7 @@ class MainActivity : AppCompatActivity() {
                 binding.tvStatus.text = "✅ Ready — calls will be recorded automatically"
                 loadRecordings()
             } else {
-                Toast.makeText(
-                    this,
-                    "Some permissions denied. Recording may not work correctly.",
-                    Toast.LENGTH_LONG
-                ).show()
+                binding.tvStatus.text = "⚠️ Some permissions denied"
             }
         }
     }
@@ -175,6 +108,4 @@ class MainActivity : AppCompatActivity() {
             return dir
         }
     }
-
-    private fun getRecordingsDir(): File = Companion.getRecordingsDir(this)
 }
