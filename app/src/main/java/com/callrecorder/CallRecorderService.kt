@@ -26,7 +26,6 @@ class CallRecorderService : Service() {
         const val ACTION_START = "ACTION_START_RECORDING"
         const val ACTION_STOP = "ACTION_STOP_RECORDING"
         const val EXTRA_CALLER_NUMBER = "EXTRA_CALLER_NUMBER"
-
         private const val CHANNEL_ID = "call_recorder_channel"
         private const val NOTIFICATION_ID = 1001
         private const val TAG = "CallRecorderService"
@@ -35,16 +34,19 @@ class CallRecorderService : Service() {
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        // Start foreground immediately to avoid crash
+        startForeground(NOTIFICATION_ID, buildNotification("📞 Call Recorder is active"))
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                val callerNumber = intent.getStringExtra(EXTRA_CALLER_NUMBER) ?: "Unknown"
-                if (!isRecording) startRecording(callerNumber)
+                val number = intent.getStringExtra(EXTRA_CALLER_NUMBER) ?: "Unknown"
+                if (!isRecording) startRecording(number)
             }
             ACTION_STOP -> {
                 if (isRecording) stopRecording()
+                stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
         }
@@ -54,9 +56,7 @@ class CallRecorderService : Service() {
     private fun startRecording(callerNumber: String) {
         try {
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val safeNumber = callerNumber.replace("+", "").replace(" ", "")
-            val fileName = "call_${safeNumber}_$timestamp.m4a"
-
+            val fileName = "call_${timestamp}.m4a"
             val dir = MainActivity.getRecordingsDir(this)
             outputFile = File(dir, fileName)
 
@@ -68,16 +68,8 @@ class CallRecorderService : Service() {
             }
 
             mediaRecorder?.apply {
-                // VOICE_CALL captures both sides on some devices (requires system privilege)
-                // Fallback: MIC captures only your side on most devices
-                setAudioSource(
-                    try {
-                        MediaRecorder.AudioSource.VOICE_CALL
-                    } catch (e: Exception) {
-                        Log.w(TAG, "VOICE_CALL not available, using MIC")
-                        MediaRecorder.AudioSource.MIC
-                    }
-                )
+                // MIC works on all devices including Xiaomi
+                setAudioSource(MediaRecorder.AudioSource.MIC)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setAudioEncoder(MediaRecorder.AudioEncoder.AAC)
                 setAudioEncodingBitRate(128000)
@@ -88,60 +80,50 @@ class CallRecorderService : Service() {
             }
 
             isRecording = true
-            Log.d(TAG, "Recording started: ${outputFile?.name}")
-
-            startForeground(NOTIFICATION_ID, buildNotification("🔴 Recording call with $callerNumber"))
+            Log.d(TAG, "Recording started: $fileName")
+            startForeground(NOTIFICATION_ID, buildNotification("🔴 Recording call..."))
 
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start recording: ${e.message}")
             isRecording = false
+            outputFile?.delete()
             stopSelf()
         }
     }
 
     private fun stopRecording() {
         try {
-            mediaRecorder?.apply {
-                stop()
-                release()
-            }
+            mediaRecorder?.stop()
+            mediaRecorder?.release()
             mediaRecorder = null
             isRecording = false
             Log.d(TAG, "Recording saved: ${outputFile?.name}")
         } catch (e: Exception) {
-            Log.e(TAG, "Error stopping recording: ${e.message}")
-            outputFile?.delete() // Delete incomplete file
+            Log.e(TAG, "Error stopping: ${e.message}")
+            outputFile?.delete()
         }
     }
 
-    private fun buildNotification(contentText: String): Notification {
-        val pendingIntent = PendingIntent.getActivity(
-            this,
-            0,
+    private fun buildNotification(text: String): Notification {
+        val intent = PendingIntent.getActivity(
+            this, 0,
             Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE
         )
-
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Call Recorder")
-            .setContentText(contentText)
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(intent)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()
     }
 
     private fun createNotificationChannel() {
         val channel = NotificationChannel(
-            CHANNEL_ID,
-            "Call Recording",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Shown while a call is being recorded"
-        }
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
+            CHANNEL_ID, "Call Recording", NotificationManager.IMPORTANCE_LOW
+        )
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
